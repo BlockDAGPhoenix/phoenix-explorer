@@ -1,0 +1,22 @@
+# Binaries
+packages/indexer/cmd/indexer/indexer
+packages/indexer/migrate
+packages/indexer/cmd/migrate/migrate
+
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# Build outputs
+dist/
+*.log
+/tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

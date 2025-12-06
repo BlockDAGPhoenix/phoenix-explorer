@@ -1,0 +1,120 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: phoenix-explorer-postgres
+    environment:
+      POSTGRES_USER: phoenix
+      POSTGRES_PASSWORD: phoenix_dev
+      POSTGRES_DB: phoenix_explorer
+    ports:
+      - "6660:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./packages/indexer/pkg/database/migrations:/docker-entrypoint-initdb.d/migrations
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phoenix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - phoenix-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: phoenix-explorer-redis
+    ports:
+      - "6661:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes
+    networks:
+      - phoenix-network
+
+  # API Service (Node.js)
+  api:
+    build:
+      context: ./packages/api
+      dockerfile: Dockerfile
+    container_name: phoenix-explorer-api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://phoenix:phoenix_dev@postgres:5432/phoenix_explorer?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      PHOENIX_RPC_URL: ${PHOENIX_RPC_URL:-http://host.docker.internal:8545}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:6663}
+    ports:
+      - "6662:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - phoenix-network
+    restart: unless-stopped
+
+  # Frontend Service (Next.js)
+  frontend:
+    build:
+      context: ./packages/frontend
+      dockerfile: Dockerfile
+    container_name: phoenix-explorer-frontend
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:6662}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:6662/ws}
+    ports:
+      - "6663:3000"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - phoenix-network
+    restart: unless-stopped
+
+  # Indexer Service (Go)
+  indexer:
+    build:
+      context: ./packages/indexer
+      dockerfile: Dockerfile
+    container_name: phoenix-explorer-indexer
+    environment:
+      DATABASE_URL: postgresql://phoenix:phoenix_dev@postgres:5432/phoenix_explorer?sslmode=disable
+      PHOENIX_RPC_URL: ${PHOENIX_RPC_URL:-http://host.docker.internal:8545}
+      INDEXER_BATCH_SIZE: ${INDEXER_BATCH_SIZE:-10}
+      INDEXER_WORKERS: ${INDEXER_WORKERS:-5}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - phoenix-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  phoenix-network:
+    driver: bridge
+
